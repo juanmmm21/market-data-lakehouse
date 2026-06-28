@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "market-data-lakehouse"
 version = "0.1.0"
 description = "Streaming pipeline that aggregates ticks into OHLCV candles and persists them in Parquet and DuckDB."
+readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "juanmmm21" }]
