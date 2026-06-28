@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "market-data-lakehouse"
+version = "0.1.0"
+description = "Streaming pipeline that aggregates ticks into OHLCV candles and persists them in Parquet and DuckDB."
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "juanmmm21" }]
+dependencies = [
+    "duckdb>=1.0,<2",
+    "pyarrow>=15.0,<23",
+    "pytz>=2024.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/market_data_lakehouse"]
