@@ -9,6 +9,16 @@ description = "Streaming pipeline that aggregates ticks into OHLCV candles and p
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "juanmmm21" }]
+keywords = ["parquet", "duckdb", "ohlcv", "lakehouse", "market-data", "candles"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Typing :: Typed",
+]
 dependencies = [
     "duckdb>=1.0,<2",
     "pyarrow>=15.0,<23",
@@ -23,8 +33,14 @@ dev = [
     "ruff>=0.4",
 ]
 
+[project.scripts]
+market-data-lakehouse = "market_data_lakehouse.__main__:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/market_data_lakehouse"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/market_data_lakehouse", "README.md", "pyproject.toml"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
