@@ -1,23 +1,70 @@
 # market-data-lakehouse
 
-Local **data lake pipeline** that aggregates live ticks into OHLCV candles (`1m`, `5m`, `1h`) and stores them in **Parquet** partitions with a **DuckDB** catalog for analytics. Third module of the [quant-core-infra](https://github.com/juanmmm21/quant-core-infra) ecosystem.
+Pipeline local de **data lake** que agrega ticks en tiempo real en velas OHLCV (`1m`, `5m`, `1h`), las persiste en particiones **Parquet** y expone un catálogo **DuckDB** para consultas analíticas. Tercer módulo del ecosistema [quant-core-infra](https://github.com/juanmmm21/quant-core-infra).
 
-Repository: [github.com/juanmmm21/market-data-lakehouse](https://github.com/juanmmm21/market-data-lakehouse)
-
----
-
-## Objective
-
-This project demonstrates:
-
-- Real-time OHLCV aggregation from normalized trade ticks
-- Partitioned Parquet storage optimized for analytics
-- DuckDB catalog for fast SQL queries over historical candles
-- JSONL replay ingestion compatible with `websocket-feed-handler` output
+Repositorio: [github.com/juanmmm21/market-data-lakehouse](https://github.com/juanmmm21/market-data-lakehouse)
 
 ---
 
-## Architecture
+## Qué es y qué problema resuelve
+
+Los ticks individuales son demasiado granulares para análisis técnico, backtesting por velas o almacenamiento eficiente a largo plazo. Este módulo transforma millones de trades en **velas OHLCV** con ventanas temporales fijas y las guarda en un formato columnar comprimido (Parquet) consultable con SQL (DuckDB).
+
+Resuelve tres necesidades a la vez:
+
+1. **Agregación en streaming** — construir velas sobre el fly sin esperar al cierre del bucket
+2. **Persistencia analítica** — Parquet particionado por exchange, símbolo, timeframe y fecha
+3. **Replay offline** — ingestar JSONL de ticks para reproducir históricos sin WebSocket
+
+---
+
+## Rol en quant-core-infra
+
+```text
+websocket-feed-handler ──► ticks ──► market-data-lakehouse ──► velas OHLCV
+                                           │
+                                           ├──► ta-indicators-from-scratch
+                                           └──► alpha-signal-generator (vía JSONL)
+```
+
+Es el **almacén local de series temporales** del ecosistema. Los indicadores técnicos y las estrategias consumen sus velas, no los ticks crudos.
+
+---
+
+## Objetivo
+
+Demuestra:
+
+- Agregación OHLCV multi-timeframe desde ticks normalizados
+- Almacenamiento particionado optimizado para analítica
+- Catálogo DuckDB sobre archivos Parquet
+- Ingesta JSONL compatible con `websocket-feed-handler`
+
+---
+
+## Cómo funciona
+
+1. **Ingesta:** `JsonlTickSource` lee ticks línea a línea (o un stream async futuro).
+2. **Agregación:** `MultiTimeframeAggregator` mantiene un bucket activo por timeframe (`1m`, `5m`, `1h`).
+3. **Por cada tick:** se actualiza `open/high/low/close/volume/trade_count` del bucket actual.
+4. **Roll forward:** cuando el tick cae en un bucket nuevo, la vela cerrada se emite al writer.
+5. **Escritura:** `ParquetLakeWriter` acumula velas en batch y las escribe en particiones Hive-style.
+6. **Catálogo:** `DuckDBLakeCatalog` registra las rutas Parquet y permite SQL directo.
+
+### Estructura de particiones
+
+```text
+data/lake/
+└── binance/
+    └── BTCUSDT/
+        ├── 1m/year=2024/month=01/day=01/part-000.parquet
+        ├── 5m/year=2024/month=01/day=01/part-000.parquet
+        └── 1h/year=2024/month=01/day=01/part-000.parquet
+```
+
+---
+
+## Arquitectura
 
 ```text
 Trade ticks (JSONL / stream)
@@ -26,38 +73,62 @@ Trade ticks (JSONL / stream)
 MultiTimeframeAggregator (1m, 5m, 1h)
         │
         ▼
-ParquetLakeWriter ──► data/{exchange}/{symbol}/{tf}/year=.../month=.../day=.../
+ParquetLakeWriter ──► particiones ZSTD
         │
         ▼
-DuckDBLakeCatalog ──► SQL queries / analytics
+DuckDBLakeCatalog ──► SELECT ... FROM candles
 ```
 
-### Core components
+### Componentes
 
-| Module | Responsibility |
+| Módulo | Responsabilidad |
 |--------|----------------|
-| `aggregator.py` | Builds OHLCV candles and rolls buckets forward |
-| `writers/parquet_writer.py` | ZSTD-compressed Parquet partitions |
-| `storage/duckdb_catalog.py` | DuckDB view over all candle files |
-| `ingest/jsonl_source.py` | Replay ticks from JSON Lines |
-| `pipeline.py` | End-to-end ingest + flush orchestration |
+| `aggregator.py` | Construye velas y hace roll de buckets |
+| `timeframes.py` | Alineación de buckets UTC |
+| `writers/parquet_writer.py` | Escritura Parquet comprimida |
+| `storage/duckdb_catalog.py` | Vista SQL sobre todos los archivos |
+| `ingest/jsonl_source.py` | Replay desde JSON Lines |
+| `pipeline.py` | Orquestación ingest + flush |
 
-### Technical decisions
+### Decisiones técnicas
 
-- **Decimal** for prices and volume during aggregation
-- **String encoding in Parquet** to preserve financial precision
-- **Hive-style partitions** by exchange, symbol, timeframe and date
-- **Batch flushing** to reduce I/O overhead under high tick rates
+- **Decimal** durante agregación; strings en Parquet para preservar precisión
+- **Particiones Hive** por exchange, símbolo, timeframe y fecha
+- **Batch flush** configurable para reducir I/O bajo alto tick rate
+- **Timezone-aware** — todos los buckets en UTC
 
 ---
 
-## Requirements
+## Modelo de datos
+
+### Tick de entrada (`TradeTick`)
+
+| Campo | Tipo | Notas |
+|-------|------|-------|
+| `exchange` | `binance` / `coinbase` | |
+| `symbol` | `str` | |
+| `price`, `quantity` | `Decimal` | |
+| `side` | `buy` / `sell` | |
+| `event_time` | `datetime` UTC | |
+
+### Vela de salida (`Candle`)
+
+| Campo | Descripción |
+|-------|-------------|
+| `open`, `high`, `low`, `close` | OHLC en Decimal |
+| `volume` | Suma de cantidades |
+| `trade_count` | Número de ticks en la vela |
+| `open_time`, `close_time` | Límites del bucket |
+
+---
+
+## Requisitos
 
 - Python **3.11+**
 
 ---
 
-## Installation
+## Instalación
 
 ```bash
 cd market-data-lakehouse
@@ -68,19 +139,21 @@ pip install -e ".[dev]"
 
 ---
 
-## CLI usage
+## Uso CLI
 
-### Ingest ticks from JSONL
+### Ingestar ticks
 
 ```bash
 market-data-lakehouse ingest \
   --input samples/btcusdt_ticks.jsonl \
   --exchange binance \
   --symbol BTCUSDT \
-  --root data/lake
+  --root data/lake \
+  --timeframes 1m 5m 1h \
+  --flush-batch-size 50
 ```
 
-### Query materialized candles
+### Consultar velas
 
 ```bash
 market-data-lakehouse query \
@@ -92,9 +165,7 @@ market-data-lakehouse query \
 
 ---
 
-## JSONL tick format
-
-Compatible with normalized `TradeEvent` payloads:
+## Formato JSONL de ticks
 
 ```json
 {
@@ -110,7 +181,7 @@ Compatible with normalized `TradeEvent` payloads:
 
 ---
 
-## Programmatic usage
+## Uso programático
 
 ```python
 import asyncio
@@ -130,9 +201,11 @@ async def main() -> None:
         exchange=ExchangeId.BINANCE,
         symbol="BTCUSDT",
         timeframes=(Timeframe.M1, Timeframe.M5, Timeframe.H1),
+        flush_batch_size=100,
     )
     pipeline = MarketDataLakehousePipeline(config)
-    await pipeline.run(JsonlTickSource("ticks.jsonl"))
+    processed = await pipeline.run(JsonlTickSource("ticks.jsonl"))
+    print(f"processed {processed} ticks")
 
 
 if __name__ == "__main__":
@@ -141,7 +214,7 @@ if __name__ == "__main__":
 
 ---
 
-## Development
+## Desarrollo
 
 ```bash
 pytest -q
@@ -151,15 +224,14 @@ mypy src
 
 ---
 
-## Ecosystem integration
+## Roadmap
 
-```text
-websocket-feed-handler → market-data-lakehouse → ta-indicators-from-scratch
-order-book-reconstructor ────────────────────────┘
-```
+- [ ] Ingesta directa desde `websocket-feed-handler` sin JSONL intermedio
+- [ ] Soporte timeframes adicionales (`15m`, `4h`, `1d`)
+- [ ] Compaction automática de particiones pequeñas
 
 ---
 
-## License
+## Licencia
 
 MIT
