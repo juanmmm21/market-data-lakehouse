@@ -1,57 +1,57 @@
 # market-data-lakehouse
 
-Pipeline local de **data lake** que agrega ticks en tiempo real en velas OHLCV (`1m`, `5m`, `1h`), las persiste en particiones **Parquet** y expone un catálogo **DuckDB** para consultas analíticas. Tercer módulo del ecosistema [quant-core-infra](https://github.com/juanmmm21/quant-core-infra).
+Local **data lake** pipeline that aggregates real-time ticks into OHLCV candles (`1m`, `5m`, `1h`), persists them in **Parquet** partitions, and exposes a **DuckDB** catalog for analytical queries. Third module of the [quant-core-infra](https://github.com/juanmmm21/quant-core-infra) ecosystem.
 
-Repositorio: [github.com/juanmmm21/market-data-lakehouse](https://github.com/juanmmm21/market-data-lakehouse)
-
----
-
-## Qué es y qué problema resuelve
-
-Los ticks individuales son demasiado granulares para análisis técnico, backtesting por velas o almacenamiento eficiente a largo plazo. Este módulo transforma millones de trades en **velas OHLCV** con ventanas temporales fijas y las guarda en un formato columnar comprimido (Parquet) consultable con SQL (DuckDB).
-
-Resuelve tres necesidades a la vez:
-
-1. **Agregación en streaming** — construir velas sobre el fly sin esperar al cierre del bucket
-2. **Persistencia analítica** — Parquet particionado por exchange, símbolo, timeframe y fecha
-3. **Replay offline** — ingestar JSONL de ticks para reproducir históricos sin WebSocket
+Repository: [github.com/juanmmm21/market-data-lakehouse](https://github.com/juanmmm21/market-data-lakehouse)
 
 ---
 
-## Rol en quant-core-infra
+## What it is and what problem it solves
+
+Individual ticks are too granular for technical analysis, candle-based backtesting, or efficient long-term storage. This module transforms millions of trades into **OHLCV candles** with fixed time windows and stores them in a compressed columnar format (Parquet) queryable via SQL (DuckDB).
+
+It solves three needs at once:
+
+1. **Streaming aggregation** — build candles on the fly without waiting for the bucket to close
+2. **Analytical persistence** — Parquet partitioned by exchange, symbol, timeframe, and date
+3. **Offline replay** — ingest tick JSONL to reproduce historical data without a WebSocket
+
+---
+
+## Role in quant-core-infra
 
 ```text
-websocket-feed-handler ──► ticks ──► market-data-lakehouse ──► velas OHLCV
+websocket-feed-handler ──► ticks ──► market-data-lakehouse ──► OHLCV candles
                                            │
                                            ├──► ta-indicators-from-scratch
-                                           └──► alpha-signal-generator (vía JSONL)
+                                           └──► alpha-signal-generator (via JSONL)
 ```
 
-Es el **almacén local de series temporales** del ecosistema. Los indicadores técnicos y las estrategias consumen sus velas, no los ticks crudos.
+It is the ecosystem's **local time-series store**. Technical indicators and strategies consume its candles, not the raw ticks.
 
 ---
 
-## Objetivo
+## Objective
 
-Demuestra:
+Demonstrates:
 
-- Agregación OHLCV multi-timeframe desde ticks normalizados
-- Almacenamiento particionado optimizado para analítica
-- Catálogo DuckDB sobre archivos Parquet
-- Ingesta JSONL compatible con `websocket-feed-handler`
+- Multi-timeframe OHLCV aggregation from normalized ticks
+- Partitioned storage optimized for analytics
+- DuckDB catalog over Parquet files
+- JSONL ingestion compatible with `websocket-feed-handler`
 
 ---
 
-## Cómo funciona
+## How it works
 
-1. **Ingesta:** `JsonlTickSource` lee ticks línea a línea (o un stream async futuro).
-2. **Agregación:** `MultiTimeframeAggregator` mantiene un bucket activo por timeframe (`1m`, `5m`, `1h`).
-3. **Por cada tick:** se actualiza `open/high/low/close/volume/trade_count` del bucket actual.
-4. **Roll forward:** cuando el tick cae en un bucket nuevo, la vela cerrada se emite al writer.
-5. **Escritura:** `ParquetLakeWriter` acumula velas en batch y las escribe en particiones Hive-style.
-6. **Catálogo:** `DuckDBLakeCatalog` registra las rutas Parquet y permite SQL directo.
+1. **Ingestion:** `JsonlTickSource` reads ticks line by line (or a future async stream).
+2. **Aggregation:** `MultiTimeframeAggregator` maintains an active bucket per timeframe (`1m`, `5m`, `1h`).
+3. **Per tick:** updates `open/high/low/close/volume/trade_count` of the current bucket.
+4. **Roll forward:** when a tick falls into a new bucket, the closed candle is emitted to the writer.
+5. **Write:** `ParquetLakeWriter` accumulates candles in batches and writes them in Hive-style partitions.
+6. **Catalog:** `DuckDBLakeCatalog` registers the Parquet paths and enables direct SQL.
 
-### Estructura de particiones
+### Partition structure
 
 ```text
 data/lake/
@@ -64,7 +64,7 @@ data/lake/
 
 ---
 
-## Arquitectura
+## Architecture
 
 ```text
 Trade ticks (JSONL / stream)
@@ -73,37 +73,37 @@ Trade ticks (JSONL / stream)
 MultiTimeframeAggregator (1m, 5m, 1h)
         │
         ▼
-ParquetLakeWriter ──► particiones ZSTD
+ParquetLakeWriter ──► ZSTD partitions
         │
         ▼
 DuckDBLakeCatalog ──► SELECT ... FROM candles
 ```
 
-### Componentes
+### Components
 
-| Módulo | Responsabilidad |
+| Module | Responsibility |
 |--------|----------------|
-| `aggregator.py` | Construye velas y hace roll de buckets |
-| `timeframes.py` | Alineación de buckets UTC |
-| `writers/parquet_writer.py` | Escritura Parquet comprimida |
-| `storage/duckdb_catalog.py` | Vista SQL sobre todos los archivos |
-| `ingest/jsonl_source.py` | Replay desde JSON Lines |
-| `pipeline.py` | Orquestación ingest + flush |
+| `aggregator.py` | Builds candles and rolls buckets |
+| `timeframes.py` | UTC bucket alignment |
+| `writers/parquet_writer.py` | Compressed Parquet writing |
+| `storage/duckdb_catalog.py` | SQL view over all files |
+| `ingest/jsonl_source.py` | Replay from JSON Lines |
+| `pipeline.py` | Ingest + flush orchestration |
 
-### Decisiones técnicas
+### Technical decisions
 
-- **Decimal** durante agregación; strings en Parquet para preservar precisión
-- **Particiones Hive** por exchange, símbolo, timeframe y fecha
-- **Batch flush** configurable para reducir I/O bajo alto tick rate
-- **Timezone-aware** — todos los buckets en UTC
+- **Decimal** during aggregation; strings in Parquet to preserve precision
+- **Hive partitions** by exchange, symbol, timeframe, and date
+- **Configurable batch flush** to reduce I/O under high tick rate
+- **Timezone-aware** — all buckets in UTC
 
 ---
 
-## Modelo de datos
+## Data model
 
-### Tick de entrada (`TradeTick`)
+### Input tick (`TradeTick`)
 
-| Campo | Tipo | Notas |
+| Field | Type | Notes |
 |-------|------|-------|
 | `exchange` | `binance` / `coinbase` | |
 | `symbol` | `str` | |
@@ -111,24 +111,24 @@ DuckDBLakeCatalog ──► SELECT ... FROM candles
 | `side` | `buy` / `sell` | |
 | `event_time` | `datetime` UTC | |
 
-### Vela de salida (`Candle`)
+### Output candle (`Candle`)
 
-| Campo | Descripción |
+| Field | Description |
 |-------|-------------|
-| `open`, `high`, `low`, `close` | OHLC en Decimal |
-| `volume` | Suma de cantidades |
-| `trade_count` | Número de ticks en la vela |
-| `open_time`, `close_time` | Límites del bucket |
+| `open`, `high`, `low`, `close` | OHLC as Decimal |
+| `volume` | Sum of quantities |
+| `trade_count` | Number of ticks in the candle |
+| `open_time`, `close_time` | Bucket bounds |
 
 ---
 
-## Requisitos
+## Requirements
 
 - Python **3.11+**
 
 ---
 
-## Instalación
+## Installation
 
 ```bash
 cd market-data-lakehouse
@@ -139,9 +139,9 @@ pip install -e ".[dev]"
 
 ---
 
-## Uso CLI
+## CLI usage
 
-### Ingestar ticks
+### Ingest ticks
 
 ```bash
 market-data-lakehouse ingest \
@@ -153,7 +153,7 @@ market-data-lakehouse ingest \
   --flush-batch-size 50
 ```
 
-### Consultar velas
+### Query candles
 
 ```bash
 market-data-lakehouse query \
@@ -165,7 +165,7 @@ market-data-lakehouse query \
 
 ---
 
-## Formato JSONL de ticks
+## Tick JSONL format
 
 ```json
 {
@@ -181,7 +181,7 @@ market-data-lakehouse query \
 
 ---
 
-## Uso programático
+## Programmatic usage
 
 ```python
 import asyncio
@@ -214,7 +214,7 @@ if __name__ == "__main__":
 
 ---
 
-## Desarrollo
+## Development
 
 ```bash
 pytest -q
@@ -226,12 +226,12 @@ mypy src
 
 ## Roadmap
 
-- [ ] Ingesta directa desde `websocket-feed-handler` sin JSONL intermedio
-- [ ] Soporte timeframes adicionales (`15m`, `4h`, `1d`)
-- [ ] Compaction automática de particiones pequeñas
+- [ ] Direct ingestion from `websocket-feed-handler` without intermediate JSONL
+- [ ] Support for additional timeframes (`15m`, `4h`, `1d`)
+- [ ] Automatic compaction of small partitions
 
 ---
 
-## Licencia
+## License
 
 MIT
