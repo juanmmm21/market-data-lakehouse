@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 
 from market_data_lakehouse.aggregator import MultiTimeframeAggregator
-from market_data_lakehouse.models import Candle, LakehouseConfig
+from market_data_lakehouse.models import Candle, LakehouseConfig, TradeTick
 from market_data_lakehouse.protocols import TickSource
 from market_data_lakehouse.storage.duckdb_catalog import DuckDBLakeCatalog
 from market_data_lakehouse.writers.parquet_writer import ParquetLakeWriter
@@ -68,6 +69,6 @@ class MarketDataLakehousePipeline:
         logger.info("flushed candles count=%s symbol=%s", len(batch), self._config.symbol)
 
 
-async def _async_iter(source: TickSource):
+async def _async_iter(source: TickSource) -> AsyncIterator[TradeTick]:
     async for tick in source.ticks():
         yield tick

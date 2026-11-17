@@ -7,7 +7,8 @@ from market_data_lakehouse.models import Candle, LakehouseConfig, TradeTick
 
 
 class TickSource(Protocol):
-    async def ticks(self) -> AsyncIterator[TradeTick]:
+    def ticks(self) -> AsyncIterator[TradeTick]:
+        """An async generator of ticks (``async def ticks(self): yield ...``)."""
         ...
 
 
