@@ -122,6 +122,38 @@ DuckDBLakeCatalog ──► SELECT ... FROM candles
 
 ---
 
+## L2 depth storage (snapshots, diffs, trades)
+
+Candles are not enough to simulate limit orders: a passive order's fate depends on how much
+volume sits ahead of it at its price. The lakehouse therefore also stores raw L2 data recorded by
+`websocket-feed-handler --channels trade depth` plus REST snapshots:
+
+```text
+data/lake/<exchange>/<symbol>/depth/
+├── snapshots/date=2026-11-17/hour=23/part-<uuid>.parquet   last_update_id, received_at, bids, asks
+├── diffs/date=2026-11-17/hour=23/part-<uuid>.parquet       first/final_update_id, event_time, received_at, bids, asks
+└── trades/date=2026-11-17/hour=23/part-<uuid>.parquet      trade_id, price, quantity, side, event_time
+```
+
+- **Append-only**: each ingest writes new part files; nothing is read back and rewritten.
+- Levels stay `[[price, quantity], ...]` **strings**, exactly as Binance sends them.
+- `export-depth` merges the three datasets into one time-ordered JSONL (snapshots by receipt time,
+  diffs and trades by event time), the input of `order-book-reconstructor replay`, which checks
+  update-id continuity and resynchronises on gaps.
+
+```bash
+market-data-lakehouse ingest-depth --input stream.jsonl snapshots.jsonl --root data/lake --symbol BTCUSDT
+market-data-lakehouse export-depth --root data/lake --symbol BTCUSDT \
+  --start 2026-11-17T23:20:00Z --end 2026-11-18T00:00:00Z --output depth.jsonl
+```
+
+Measured on 2026-11-17 (BTCUSDT, Binance `data-stream.binance.vision`, 6.5 minutes: 3,856 diffs,
+10,070 trades, 2 snapshots of 5,000 levels): 7.2 MB of JSONL became 832 KB of Parquet (zstd);
+ingest 0.46 s and export 0.59 s wall time on a 4-vCPU Linux x86_64 container. Exported and
+replayed, the book matched the REST snapshot on all 400 compared levels.
+
+---
+
 ## Requirements
 
 - Python **3.11+**
