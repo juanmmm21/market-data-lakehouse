@@ -4,7 +4,9 @@ import argparse
 import asyncio
 import json
 import logging
+from datetime import datetime
 
+from market_data_lakehouse.depth import DepthLakeWriter, export_depth, read_records
 from market_data_lakehouse.ingest.jsonl_source import JsonlTickSource
 from market_data_lakehouse.models import ExchangeId, LakehouseConfig, Timeframe
 from market_data_lakehouse.pipeline import MarketDataLakehousePipeline
@@ -45,7 +47,33 @@ def build_parser() -> argparse.ArgumentParser:
     query.add_argument("--timeframe", required=True, choices=[item.value for item in Timeframe])
     query.add_argument("--limit", type=int, default=20)
 
+    ingest_depth = subparsers.add_parser(
+        "ingest-depth",
+        help="Guarda snapshots, diffs L2 y trades grabados (JSONL) en Parquet.",
+    )
+    ingest_depth.add_argument("--input", nargs="+", required=True)
+    ingest_depth.add_argument("--root", default="data/lake")
+    ingest_depth.add_argument("--exchange", default="binance")
+    ingest_depth.add_argument("--symbol", required=True)
+
+    export = subparsers.add_parser(
+        "export-depth",
+        help="Exporta snapshots + diffs + trades en un JSONL ordenado (para replays).",
+    )
+    export.add_argument("--root", default="data/lake")
+    export.add_argument("--exchange", default="binance")
+    export.add_argument("--symbol", required=True)
+    export.add_argument("--start", default=None, help="ISO-8601 UTC")
+    export.add_argument("--end", default=None, help="ISO-8601 UTC")
+    export.add_argument("--output", required=True)
+
     return parser
+
+
+def _parse_time(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 async def _run_ingest(args: argparse.Namespace) -> None:
@@ -88,6 +116,29 @@ def main() -> None:
 
     if args.command == "query":
         _run_query(args)
+        return
+
+    if args.command == "ingest-depth":
+        report = DepthLakeWriter(args.root).ingest(
+            read_records(args.input), exchange=args.exchange, symbol=args.symbol
+        )
+        print(json.dumps({"rows": report.rows, "files": report.files,
+                          "rejected": report.rejected}))
+        return
+
+    if args.command == "export-depth":
+        count = 0
+        with open(args.output, "w", encoding="utf-8") as handle:
+            for record in export_depth(
+                args.root,
+                symbol=args.symbol,
+                exchange=args.exchange,
+                start=_parse_time(args.start),
+                end=_parse_time(args.end),
+            ):
+                handle.write(json.dumps(record) + "\n")
+                count += 1
+        logging.getLogger(__name__).info("exported %s depth records to %s", count, args.output)
         return
 
     raise RuntimeError(f"unsupported command: {args.command}")
